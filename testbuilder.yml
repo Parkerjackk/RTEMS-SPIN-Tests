@@ -32,10 +32,10 @@
 
 spin2test: /Users/butrfeld/REPOS/PromelaTestBuilder/spin2test.py
 modelsfile: /Users/butrfeld/REPOS/RTEMS-SPIN-Tests/models.yml
-rtems: /Users/butrfeld/rtems/src/rtems/  
-rsb: /Users/butrfeld/rtems/6/bin/
+osroot: /Users/butrfeld/rtems/src/rtems/  
+tools: /Users/butrfeld/rtems/6/bin/
 simulator: /Users/butrfeld/rtems/6/bin/sparc-rtems6-sis
-testyamldir: /Users/butrfeld/rtems/src/rtems/spec/build/testsuites/validation/ 
+testdecl: /Users/butrfeld/rtems/src/rtems/spec/build/testsuites/validation/ 
 testcode: /Users/butrfeld/rtems/src/rtems/testsuites/validation/
 testexedir:  /Users/butrfeld/rtems/src/rtems/build/sparc/leon3/testsuites/validation/ 
 testsuite: model-0
