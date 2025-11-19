@@ -22,7 +22,7 @@ This project is licensed under the
 
 ## Overview
 
-This repository contains Promela models of various components of [RTEMS](https://www.rtems.org), along with YAML configurations that identify the models, and an installation of RTEMS.
+This repository contains Promela models of various components of [RTEMS](https://www.rtems.org), along with YAML configurations that identify the models, and point at an installation of RTEMS (kept somewhere else).
 
 The  Promela models and supporting material can be found here.
 
