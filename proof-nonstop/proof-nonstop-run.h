@@ -1,0 +1,6 @@
+#ifndef PROOF_NONSTOP_RUN_H
+#define PROOF_NONSTOP_RUN_H
+
+// NOTHING YET
+
+#endif 

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Runs SPIN to generate test code for all defined scenarios
 
-# Copyright (C) 2021 Trinity College Dublin (www.tcd.ie)
+# Copyright (C) 2021-2023 Trinity College Dublin (www.tcd.ie)
+#               James Gooding Hunt
 #               Robert Jennings
 #               Andrew Butterfield
 #
@@ -30,17 +31,17 @@
 # located in the same directory as testbuilder.py
 # All pathnames should be absolute
 
-spin2test: /Users/butrfeld/REPOS/PromelaTestBuilder/spin2test.py
-modelsfile: /Users/butrfeld/REPOS/RTEMS-SPIN-Tests/models.yml
-osroot: /Users/butrfeld/rtems/src/rtems/  
-tools: /Users/butrfeld/rtems/6/bin/
-simulator: /Users/butrfeld/rtems/6/bin/sparc-rtems6-sis
-testdecl: /Users/butrfeld/rtems/src/rtems/spec/build/testsuites/validation/ 
-testcode: /Users/butrfeld/rtems/src/rtems/testsuites/validation/
-testexedir:  /Users/butrfeld/rtems/src/rtems/build/sparc/leon3/testsuites/validation/ 
+spin2test: /home/parkerjackk/quick-start/PromelaTestbuilder/spin2test.py
+modelsfile: /home/parkerjackk/quick-start/RTEMS-SPIN-Tests/models.yml
+osroot: /home/parkerjackk/quick-start/src/rtems  # rtems.git, or ..../modules/rtems/
+tools: /home/parkerjackk/quick-start/rtems/6/bin 
+simulator: /home/parkerjackk/quick-start/rtems/6/sparc-rtems6 #??
+testdecl: /home/parkerjackk/quick-start/src/rtems/spec/build/testsuites/validation # directory containing <modelname>.yml
+testcode: /home/parkerjackk/quick-start/src/rtems/testsuites/validation #??
+testexedir:  /home/parkerjackk/quick-start/src/rtems/build/sparc/leon3/testsuites/validation # directory containing ts-<modelname>.exe
 testsuite: model-0
-simulatorargs: -leon3 -r s -m 4  
-spinallscenarios: -DTEST_GEN -run -E -c0 -e 
-disable_negation_at: [] 
-spin_assert: -run -E -c0 -e 
-spin_ltl: -run -E -c0 -e -ltl 
+simulatorargs: -leon3 -r s -m 2  # run command executes "<simulator> <simargs> <testexedir>/ts-<testsuite>.exe"
+spinallscenarios: -DTEST_GEN -run -E -c0 -e # trail generation "spin <spinallscenarios> <model>.pml"
+disable_negation_at: [] # list of node names containing assertions not to negate
+spin_assert: -run -E -c0 -e # trail generation for files with negated Assert "spin <spin_assert> <file_name>.pml"
+spin_ltl: -run -E -c0 -e -ltl # trail generation for files with negated LTL "spin <spin_ltl><ltl_name> <file_name>.pml"

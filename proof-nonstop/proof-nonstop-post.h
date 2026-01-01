@@ -1,0 +1,6 @@
+#ifndef PROOF_NON_STOP_POST_H
+#define PROOF_NON_STOP_POST_H
+
+// NOTHING YET
+
+#endif
