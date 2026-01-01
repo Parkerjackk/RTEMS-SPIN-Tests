@@ -1,0 +1,3 @@
+LANGUAGE: C
+NAME: |
+  /* Proof-of-concept non-stop SMP model (no refinement mappings yet) */

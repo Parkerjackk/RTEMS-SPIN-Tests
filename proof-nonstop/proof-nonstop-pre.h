@@ -1,0 +1,6 @@
+#ifndef PROOF_NONSTOP_PRE_H
+#define PROOF_NONSTOP_PRE_H
+
+// NOTHING YET
+
+#endif 
