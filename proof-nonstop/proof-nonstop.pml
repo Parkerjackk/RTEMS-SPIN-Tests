@@ -102,7 +102,7 @@ proctype Worker()
 init
 {
     atomic{
-        run traceWindow();
+        //run traceWindow();
         run Runner();
         run Worker();
     }

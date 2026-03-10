@@ -1,0 +1,157 @@
+/* ------------------------------------------------------------
+ * PSEUDOCODE: Non-stop (cyclic) harness for barrier-mgr model
+ * Style A: bounded iterations + per-iteration reset + scenario re-run
+ * ------------------------------------------------------------ */
+
+/* Existing task IDs */
+#define TASK1_ID 1
+#define TASK2_ID 2
+#define TASK3_ID 3
+
+/* Add keepalive task:
+ * change TASK_MAX in barrier-mgr.pml from 4 -> 5
+ * (so the System loop sees task IDs 1..4)
+ */
+#define TASK_MAX       5
+#define KEEPALIVE_ID   4
+
+/* Bound iterations for TEST_GEN so SPIN terminates */
+#define MAX_ITERATIONS  3
+
+
+/* Reset everything that could carry across iterations and break semantics.
+ * IMPORTANT: do NOT “change API semantics” – this is purely harness reset.
+ */
+inline reset_iteration_state() {
+  int tid;
+  int bid;
+
+  /* Reset sync semaphores (ordering primitives) */
+  test_sync_sema[0] = false;
+  test_sync_sema[1] = false;
+  test_sync_sema[2] = false;
+
+  /* Reset task bookkeeping relevant to timeouts/blocking */
+  tid = 1;
+  do
+  :: (tid == TASK_MAX) -> break
+  :: else ->
+      tasks[tid].ticks = 0;
+      tasks[tid].tout  = false;
+
+      /* NOTE: prio/preemptable are set inside Runner/Worker procs,
+       * but you can also clear them here if you want a “hard reset”.
+       */
+      tid++
+  od
+
+  /* Reset barrier table */
+  bid = 1;
+  do
+  :: (bid == MAX_BARRIERS) -> break
+  :: else ->
+      barriers[bid].b_name        = 0;
+      barriers[bid].isAutomatic   = false;
+      barriers[bid].maxWaiters    = 0;
+      barriers[bid].waiterCount   = 0;
+      barriers[bid].isInitialised = false;
+
+      /* clear waiters[] */
+      tid = 1;
+      do
+      :: (tid == TASK_MAX) -> break
+      :: else ->
+          barriers[bid].waiters[tid] = false;
+          tid++
+      od;
+
+      bid++
+  od
+
+  /* Reset scenario / multicore globals that chooseScenario overwrites anyway
+   * (optional, but makes your harness intentions explicit)
+   */
+  multicore = false;
+  task1Core = THIS_CORE;
+  task2Core = THIS_CORE;
+  task3Core = THIS_CORE;
+
+  /* ensure the three scenario tasks start Ready each iteration
+   * (chooseScenario already does this, but it’s safe/redundant)
+   */
+  tasks[TASK1_ID].state = Ready;
+  tasks[TASK2_ID].state = Ready;
+  tasks[TASK3_ID].state = Ready;
+}
+
+
+/* Wait until one scenario-iteration completes */
+inline wait_iteration_complete() {
+  do
+  :: (tasks[TASK1_ID].state == Zombie &&
+      tasks[TASK2_ID].state == Zombie &&
+      tasks[TASK3_ID].state == Zombie) -> break
+  :: else -> skip
+  od
+}
+
+
+init {
+  pid nr;
+
+  /* one-time logging + metadata */
+  printf("@@@ %d LOG TestName: Barrier_Manager_NonStop\n", _pid);
+  outputDefines();
+  outputDeclarations();
+
+  printf("@@@ %d INIT\n", _pid);
+
+  /* Start background processes ONCE */
+  run System();
+  run Clock();
+
+  /* Keepalive prevents System from stopping the clock after each iteration */
+  tasks[KEEPALIVE_ID].state = BarrierWait;
+  printf("@@@ %d STATE %d BarrierWait (keepalive)\n", _pid, KEEPALIVE_ID);
+
+  byte iters = 0;
+
+  do
+#ifdef TEST_GEN
+  :: (iters < MAX_ITERATIONS) ->
+#else
+  :: true ->
+#endif
+      iters++;
+      printf("@@@ %d LOG non-stop iteration %d\n", _pid, iters);
+
+      atomic {
+        reset_iteration_state();
+        chooseScenario();
+      }
+
+      /* Spawn this iteration’s tasks */
+      run Runner(task1Core, TASK1_ID, task_in[TASK1_ID]);
+      run Worker0(task2Core, TASK2_ID, task_in[TASK2_ID]);
+      run Worker1(task3Core, TASK3_ID, task_in[TASK3_ID]);
+
+      /* No overlap: wait for all three to finish */
+      wait_iteration_complete();
+
+      printf("@@@ %d LOG iteration %d complete\n", _pid, iters);
+
+#ifdef TEST_GEN
+  :: else -> break
+#endif
+  od
+
+  /* Controlled termination: allow System to see “all zombies” and stop Clock */
+  tasks[KEEPALIVE_ID].state = Zombie;
+  printf("@@@ %d STATE %d Zombie (keepalive stop)\n", _pid, KEEPALIVE_ID);
+
+#ifdef TEST_GEN
+  assert(false);
+#endif
+
+  printf("@@@ %d LOG Barrier Manager NonStop finished\n", _pid);
+}
