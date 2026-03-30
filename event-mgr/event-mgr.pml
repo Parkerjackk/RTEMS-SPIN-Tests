@@ -517,14 +517,18 @@ inline chooseScenario() {
   rcvCore = 0;
 
   if
-  //::  scenario = Send;
-  //::  scenario = Receive;
+  ::  scenario = Send;
+  ::  scenario = Receive;
   ::  scenario = SndRcv;
-  //::  scenario = SndPre;
-  //::  scenario = SndRcvSnd;
-  //::  scenario = MultiCore;
+  ::  scenario = SndPre;
+  ::  scenario = SndRcvSnd;
+  ::  scenario = MultiCore;
   fi
-  atomic{printf("@@@ %d LOG scenario ",_pid); printm(scenario); nl()} ;
+
+  atomic{printf("@@@ %d LOG scenario ",_pid); 
+  printm(scenario); 
+  printf(" doSend=%d doReceive=%d sendPrio=%d rcvPrio=%d sendTarget=%d sendEvents=%d rcvEvents=%d rcvWait=%d rcvAll=%d\n",
+       doSend, doReceive, sendPrio, rcvPrio, sendTarget, sendEvents, rcvEvents, rcvWait, rcvAll);}
 
 
   if
@@ -541,13 +545,13 @@ inline chooseScenario() {
         printf( "@@@ %d LOG sub-scenario wait:%d interval:%d, out:%d\n",
                 _pid, rcvWait, rcvInterval, rcvOut )
   ::  scenario == SndRcv ->
+        rcvWait = false;
+        rcvAll = false;
         if
         ::  sendEvents = 14; // {1,1,1,0}
         ::  sendEvents = 11; // {1,0,1,1}
         ::  rcvEvents = EVTS_PENDING;
         ::  rcvEvents = EVTS_ALL;
-            rcvWait = false;
-            rcvAll = false;
         fi
         printf( "@@@ %d LOG sub-scenario send/receive events:%d/%d\n",
                 _pid, sendEvents, rcvEvents )
@@ -637,7 +641,7 @@ do
 
       start_round = true;
       round_done = false;
-      printf("@@@ %d LOG ROUND_START %d scenario=", _pid);
+      printf("@@@ %d LOG ROUND_START scenario=", _pid);
       printm(scenario);
       printf(" sendPrio=%d rcvPrio=%d sendTarget=%d sendEvents=%d rcvEvents=%d\n",
                sendPrio, rcvPrio, sendTarget, sendEvents, rcvEvents);
@@ -787,13 +791,8 @@ do
       fi
       */
       TestSyncRelease(sendSema);
-      atomic{
-        round_done = true;
-#ifdef TEST_GEN
-  assert(false);
-#endif
-      }
-  
+      round_done = true;
+
   progress:RoundEnd:
       printf("@@@ %d LOG ROUND_END: sendrc=%d recrc=%d pending(S)=%d pending(R)=%d\n",
       _pid, sendrc, recrc, evtstate[SEND_ID].pending, evtstate[RCV_ID].pending);
@@ -811,10 +810,13 @@ do
             cov_preempt_triggered, cov_multicore);
 
         /* Scenario Coverage */
-        printf(" @@@ %d LOG COVERAGE(SCENARIO): send_only=%d rcv_only=%d send_twice=%d send_preempt=%d bad_target=%d\n",
+        printf("@@@ %d LOG COVERAGE(SCENARIO): send_only=%d rcv_only=%d send_twice=%d send_preempt=%d bad_target=%d\n",
               _pid,
               cov_send_only, cov_receive_only, cov_send_twice, cov_send_preemptable, cov_send_bad_target);
 
+#ifdef TEST_GEN
+  assert(false);
+#endif
 od
   printf("@@@ %d LOG Receiver %d finished\n",_pid,taskid);
   tasks[taskid].state = Zombie;
@@ -832,9 +834,9 @@ init {
   outputDeclarations();
 
   printf("@@@ %d INIT\n",_pid);
+  chooseScenario();
 
   printf("Run...\n");
-  chooseScenario();
 
   run System();
   run Clock();
