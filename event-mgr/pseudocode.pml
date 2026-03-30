@@ -68,64 +68,6 @@
 #define EVTS_ALL 15
 #define NO_TIMEOUT 0
 
-/* 
- * Round Control:
- *  - Sender starts a round by setting start_round = true
- *  - Receiver consumes that flag, executes, then sets round_done = true
- */
-bool first_round = true;
-bool start_round = false; 
-bool round_done = false;
-
-/* 
- * General Purpose Coverage flags (monotonic) 
- * These record which behaviours/branches were observed at least once
- * across all explored executions.
- */
-
-/* Sender-side priority comparison branch taken */
-bool cov_send_lower_prio = false;     /* Sender priority numerally lower */
-bool cov_send_equal_prio = false;
-bool cov_send_higher_prio = false;
-
-
-/* Send API outcomes / effects */
-bool cov_send_inv_id = false;         /* Send attempt with invald target id */
-bool cov_send_woke_receiver = false;  /* Send satisfied a pending receive and woke target */
-
-
-/* Receiver API outcomes / effect */
-bool cov_rcv_null_out = false;        /* receive called with out==0 */
-bool cov_rcv_pending = false;         /* receive called with EVTS_PENDING */
-bool cov_rcv_satisfied = false;       /* receive satisfied immediately */
-bool cov_rcv_nowait_unsat = false;    /* receive unsatisfied + no-wait */
-bool cov_rcv_timeout = false;         /* receive entered timeout path (interval > 0) */
-bool cov_rcv_wait_forever = false;    /* receive entered wait-forever path (interval <= 0) */
-
-
-/* Explicit “blocking happened” coverage (actual state transitions into blocked states) */
-bool cov_rcv_block_eventwait = false; /* receiver transitioned into EventWait */
-bool cov_rcv_block_timewait  = false; /* receiver transitioned into TimeWait */
-
-
-/* Preemption path (OtherWait) */
-bool cov_preempt_triggered = false;   /* sender was forced into OtherWait due to preemption */
-
-/* Multicore path taken (SetProcessor invoked) */
-bool cov_multicore = false;
-
-/*
- * SCENARIO-SELECTION / FEATURE COVERAGE FLAGS (monotonic)
- * These record what chooseScenario() *configured* at round start.
- * They’re not “API behaviour” per se—more like workload/scenario coverage.
- */
-
-bool cov_send_only = false;        /* doReceive == false */
-bool cov_receive_only = false;     /* doSend == false */
-bool cov_send_twice = false;       /* sendTwice == true */
-bool cov_send_preemptable = false; /* sendPreempt == true */
-bool cov_send_bad_target = false;  /* configured sendTarget >= BAD_ID at scenario selection */
-
 inline outputDefines () {
    printf("@@@ %d DEF NO_OF_EVENTS %d\n",_pid,NO_OF_EVENTS);
    printf("@@@ %d DEF EVTS_NONE %d\n",_pid,EVTS_NONE);
@@ -167,6 +109,16 @@ byte recout[TASK_MAX] ; // models receive 'out' location.
  * Here ;; is "sequential" composition of *different* threads
  */
 
+/* 
+ * Simple Handshake FSM for round control
+ *  Ensures no missed pulses, no double-exection per round
+ *  ROUND_IDLE: nothing scheduled yet / safe to reset & choose scenario
+ *  ROUND_OPEN: Sender / Receiver are allowed to run exactly once
+ *  ROUND_EXTRACT: both finished; TEST_GEN cn be triggered, then close round
+ */
+
+mytype = { ROUND_IDLE, ROUND_OPEN, ROUND_EXTRACT };
+mtype round_state;
 
 inline outputDeclarations () {
   printf("@@@ %d DECL byte sendrc 0\n",_pid);
@@ -228,9 +180,7 @@ inline preemptIfRequired(sendid,rcvid) {
       // we use the (usual?) convention that higher priority is a lower number
       tasks[rcvid].prio < tasks[sendid].prio &&
       tasks[rcvid].state == Ready
-      ->  
-          cov_preempt_triggered = true;
-          tasks[sendid].state = OtherWait;
+      ->  tasks[sendid].state = OtherWait;
           printf("@@@ %d STATE %d OtherWait\n",_pid,sendid)
   ::  else
   fi
@@ -257,9 +207,7 @@ inline preemptIfRequired(sendid,rcvid) {
 inline event_send(self,tid,evts,rc) {
   atomic{
     if
-    ::  tid >= BAD_ID ->
-          cov_send_inv_id = true;
-           rc = RC_InvId
+    ::  tid >= BAD_ID -> rc = RC_InvId
     ::  tid < BAD_ID ->
         evtstate[tid].pending = evtstate[tid].pending | evts
         // at this point, have we woken the target task?
@@ -268,7 +216,6 @@ inline event_send(self,tid,evts,rc) {
         satisfied(evtstate[tid],got,sat);
         if
         ::  sat ->
-            cov_send_woke_receiver = true;
             tasks[tid].state = Ready;
             printf("@@@ %d STATE %d Ready\n",_pid,tid)
             preemptIfRequired(self,tid) ;
@@ -320,11 +267,9 @@ inline event_receive(self,evts,wait,wantall,interval,out,rc){
     evtstate[self].all = wantall
     if
     ::  out == 0 ->
-        cov_rcv_null_out = true;
         printf("@@@ %d LOG Receive NULL out.\n",_pid);
         rc = RC_InvAddr ;
     ::  evts == EVTS_PENDING ->
-        cov_rcv_pending = true;
         printf("@@@ %d LOG Receive Pending.\n",_pid);
         recout[out] = evtstate[self].pending;
         rc = RC_OK
@@ -333,22 +278,18 @@ inline event_receive(self,evts,wait,wantall,interval,out,rc){
         retry:  satisfied(evtstate[self],recout[out],sat);
         if
         ::  sat ->
-            cov_rcv_satisfied = true;
             printf("@@@ %d LOG Receive Satisfied!\n",_pid);
             setminus(evtstate[self].pending,evtstate[self].pending,recout[out]);
             printf("@@@ %d LOG pending'[%d] = ",_pid,self);
             printevents(evtstate[self].pending); nl();
             rc = RC_OK;
         ::  !sat && !wait ->
-            cov_rcv_nowait_unsat = true;
             printf("@@@ %d LOG Receive Not Satisfied (no wait)\n",_pid);
             rc = RC_Unsat;
         ::  !sat && wait && interval > 0 ->
-            cov_rcv_timeout = true;
             printf("@@@ %d LOG Receive Not Satisfied (timeout %d)\n",_pid,interval);
             tasks[self].ticks = interval;
             tasks[self].tout = false;
-            cov_rcv_block_timewait = true;
             tasks[self].state = TimeWait;
             printf("@@@ %d STATE %d TimeWait %d\n",_pid,self,interval)
             waitUntilReady(self);
@@ -357,9 +298,7 @@ inline event_receive(self,evts,wait,wantall,interval,out,rc){
             ::  else              ->  goto retry
             fi
         ::  else -> // !sat && wait && interval <= 0
-            cov_rcv_wait_forever = true;
             printf("@@@ %d LOG Receive Not Satisfied (wait).\n",_pid);
-            cov_rcv_block_eventwait = true;
             tasks[self].state = EventWait;
             printf("@@@ %d STATE %d EventWait\n",_pid,self)
             if
@@ -437,6 +376,7 @@ bool sentFirst;
 byte sendPrio;
 bool sendPreempt;
 byte sendTarget;
+bool sender_done;
 unsigned sendEvents : NO_OF_EVENTS
 unsigned sendEvents1 : NO_OF_EVENTS
 unsigned sendEvents2 : NO_OF_EVENTS
@@ -453,6 +393,8 @@ bool rcvAll;
 int rcvInterval;
 int rcvOut;
 byte rcvPrio;
+bool receiver_done;
+
 
 /*
  * Semaphore Setup
@@ -524,11 +466,7 @@ inline chooseScenario() {
   ::  scenario = SndRcvSnd;
   ::  scenario = MultiCore;
   fi
-
-  atomic{printf("@@@ %d LOG scenario ",_pid); 
-  printm(scenario); 
-  printf(" doSend=%d doReceive=%d sendPrio=%d rcvPrio=%d sendTarget=%d sendEvents=%d rcvEvents=%d rcvWait=%d rcvAll=%d\n",
-       doSend, doReceive, sendPrio, rcvPrio, sendTarget, sendEvents, rcvEvents, rcvWait, rcvAll);}
+  atomic{printf("@@@ %d LOG scenario ",_pid); printm(scenario); nl()} ;
 
 
   if
@@ -542,36 +480,36 @@ inline chooseScenario() {
         :: rcvWait = true; rcvInterval = 4
         :: rcvOut = 0;
         fi
-        printf( "@@@ %d LOG sub-scenario wait:%d interval:%d, out:%d\n",
+        printf( "@@@ %d LOG sub-senario wait:%d interval:%d, out:%d\n",
                 _pid, rcvWait, rcvInterval, rcvOut )
   ::  scenario == SndRcv ->
-        rcvWait = false;
-        rcvAll = false;
         if
         ::  sendEvents = 14; // {1,1,1,0}
         ::  sendEvents = 11; // {1,0,1,1}
         ::  rcvEvents = EVTS_PENDING;
         ::  rcvEvents = EVTS_ALL;
+            rcvWait = false;
+            rcvAll = false;
         fi
-        printf( "@@@ %d LOG sub-scenario send/receive events:%d/%d\n",
+        printf( "@@@ %d LOG sub-senario send/receive events:%d/%d\n",
                 _pid, sendEvents, rcvEvents )
   ::  scenario == SndPre ->
         sendPrio = 3;
         sendPreempt = true;
         startSema = rcvSema;
-        printf( "@@@ %d LOG sub-scenario send-preemptable events:%d\n",
+        printf( "@@@ %d LOG sub-senario send-preemptable events:%d\n",
                 _pid, sendEvents )
   ::  scenario == SndRcvSnd ->
         sendEvents1 = 2; // {0,0,1,0}
         sendEvents2 = 8; // {1,0,0,0}
         sendEvents = sendEvents1;
         sendTwice = true;
-        printf( "@@@ %d LOG sub-scenario send-receive-send events:%d\n",
+        printf( "@@@ %d LOG sub-senario send-receive-send events:%d\n",
                 _pid, sendEvents )
   ::  scenario == MultiCore ->
         multicore = true;
         sendCore = 1;
-        printf( "@@@ %d LOG sub-scenario multicore send-receive events:%d\n",
+        printf( "@@@ %d LOG sub-senario multicore send-receive events:%d\n",
                 _pid, sendEvents )
   ::  else // go with defaults
   fi
@@ -580,6 +518,10 @@ inline chooseScenario() {
 
 
 inline resetRoundState() {
+
+  /* reset termination flags */
+  sender_done = false;
+  receiver_done = false;
 
   /* Clear event-manager runtime state */
   evtstate[SEND_ID].wanted = EVTS_NONE;
@@ -609,112 +551,76 @@ proctype Sender (byte nid, taskid) {
     printf( "@@@ %d DECL byte prio\n", _pid );
 
 do
-:: (first_round || round_done) ->  
-    atomic 
-    {
-      resetRoundState();
-      first_round = false;
-      if
-      :: !doReceive -> cov_send_only = true
-      :: else -> skip
-      fi
+::  (round_state == ROUND_OPEN && !sender_done) ->
+      /* start of round progess marker */
+
+      tasks[taskid].nodeid = nid;
+      tasks[taskid].pmlid = _pid;
+      tasks[taskid].prio = sendPrio;
+      tasks[taskid].preemptable = sendPreempt;
+      tasks[taskid].state = Ready;
+      printf("@@@ %d TASK Worker\n",_pid);
+      /* printf("@@@ %d LOG Sender Task %d running on Node %d\n",_pid,taskid,nid); */
 
       if
-      :: !doSend -> cov_receive_only = true
-      :: else -> skip
-      fi
-
-      if
-      :: sendTwice -> cov_send_twice = true
-      :: else -> skip
-      fi
-
-      if
-      :: sendPreempt -> cov_send_preemptable = true
-      :: else -> skip
-      fi
-
-      if
-      :: sendTarget >= BAD_ID -> cov_send_bad_target = true
-      :: else -> skip
-      fi
-
-      start_round = true;
-      round_done = false;
-      printf("@@@ %d LOG ROUND_START scenario=", _pid);
-      printm(scenario);
-      printf(" sendPrio=%d rcvPrio=%d sendTarget=%d sendEvents=%d rcvEvents=%d\n",
-               sendPrio, rcvPrio, sendTarget, sendEvents, rcvEvents);
-    }
-    progress:RoundStart:
-
-    tasks[taskid].nodeid = nid;
-    tasks[taskid].pmlid = _pid;
-    tasks[taskid].prio = sendPrio;
-    tasks[taskid].preemptable = sendPreempt;
-    tasks[taskid].state = Ready;
-    printf("@@@ %d TASK Worker\n",_pid);
-    /* printf("@@@ %d LOG Sender Task %d running on Node %d\n",_pid,taskid,nid); */
-
-    if
-    :: sendPrio > rcvPrio ->
-        cov_send_lower_prio = true;
-        printf("@@@ %d CALL LowerPriority\n", _pid);
-    :: sendPrio == rcvPrio ->
-        cov_send_equal_prio = true;
-        printf("@@@ %d CALL EqualPriority\n", _pid);
-    :: sendPrio < rcvPrio ->
-        cov_send_higher_prio = true;
-        printf("@@@ %d CALL HigherPriority\n", _pid);
-    fi
-
-    if
-    :: multicore ->
-        // printf("@@@ %d CALL OtherScheduler %d\n", _pid, sendCore);
-        cov_multicore = true;
-        printf("@@@ %d CALL SetProcessor %d\n", _pid, sendCore);
-    :: else -> skip
-    fi
-
-  repeat:
-
-    TestSyncObtain(sendSema);
-
-    if
-    :: doSend ->
-      if
-      :: !sentFirst -> printf("@@@ %d CALL StartLog\n",_pid);
-      :: else
-      fi
-      printf("@@@ %d CALL event_send %d %d %d sendrc\n",_pid,taskid,sendTarget,sendEvents);
-
-      if
-      :: sendPreempt && !sentFirst -> printf("@@@ %d CALL CheckPreemption\n",_pid);
-      :: !sendPreempt && !sentFirst -> printf("@@@ %d CALL CheckNoPreemption\n",_pid);
+      :: multicore ->
+          // printf("@@@ %d CALL OtherScheduler %d\n", _pid, sendCore);
+          printf("@@@ %d CALL SetProcessor %d\n", _pid, sendCore);
       :: else
       fi
 
-            /* (self,  tid,       evts,      rc) */
-      event_send(taskid,sendTarget,sendEvents,sendrc);
+      if
+      :: sendPrio > rcvPrio -> printf("@@@ %d CALL LowerPriority\n", _pid);
+      :: sendPrio == rcvPrio -> printf("@@@ %d CALL EqualPriority\n", _pid);
+      :: sendPrio < rcvPrio -> printf("@@@ %d CALL HigherPriority\n", _pid);
+      :: else
+      fi
 
-      printf("@@@ %d SCALAR sendrc %d\n",_pid,sendrc);
-    :: else
-    fi
+    repeat:
 
-    TestSyncRelease(rcvSema);
+      TestSyncObtain(sendSema);
 
-    if
-    :: sendTwice && !sentFirst ->
-      sentFirst = true;
-      sendEvents = sendEvents2;
-      goto repeat;
-    :: else
-    fi
+      if
+      :: doSend ->
+        if
+        :: !sentFirst -> printf("@@@ %d CALL StartLog\n",_pid);
+        :: else
+        fi
+        printf("@@@ %d CALL event_send %d %d %d sendrc\n",_pid,taskid,sendTarget,sendEvents);
 
+        if
+        :: sendPreempt && !sentFirst -> printf("@@@ %d CALL CheckPreemption\n",_pid);
+        :: !sendPreempt && !sentFirst -> printf("@@@ %d CALL CheckNoPreemption\n",_pid);
+        :: else
+        fi
+
+              /* (self,  tid,       evts,      rc) */
+        event_send(taskid,sendTarget,sendEvents,sendrc);
+
+        printf("@@@ %d SCALAR sendrc %d\n",_pid,sendrc);
+      :: else
+      fi
+
+      TestSyncRelease(rcvSema);
+
+      if
+      :: sendTwice && !sentFirst ->
+        sentFirst = true;
+        sendEvents = sendEvents2;
+        goto repeat;
+      :: else
+      fi
+
+      /* End of round marker */
+      sender_done = true;
+
+:: (round_state != ROUND_OPEN) ->
+      /* wait for next round to open */
+      skip
 od
-  printf("@@@ %d LOG Sender %d finished\n",_pid,taskid);
-  tasks[taskid].state = Zombie;
-  printf("@@@ %d STATE %d Zombie\n",_pid,taskid)
+  //printf("@@@ %d LOG Sender %d finished\n",_pid,taskid);
+  //tasks[taskid].state = Zombie;
+  //printf("@@@ %d STATE %d Zombie\n",_pid,taskid)
 }
 
 
@@ -726,8 +632,7 @@ proctype Receiver (byte nid, taskid) {
     printf( "@@@ %d DECL byte prio\n", _pid );
 
 do
-:: (start_round == true) ->
-      start_round = false;
+:: (round_state == ROUND_OPEN && !receiver_done) ->
       tasks[taskid].nodeid = nid;
       tasks[taskid].pmlid = _pid;
       tasks[taskid].prio = rcvPrio;
@@ -738,7 +643,6 @@ do
       if
       :: multicore ->
           // printf("@@@ %d CALL RunnerScheduler %d\n", _pid, rcvCore);
-          cov_multicore = true;
           printf("@@@ %d CALL SetProcessor %d\n", _pid, rcvCore);
       :: else
       fi
@@ -791,37 +695,20 @@ do
       fi
       */
       TestSyncRelease(sendSema);
-      round_done = true;
+      
+      /* End of round marker */
+      receiver_done = true;
 
-  progress:RoundEnd:
-      printf("@@@ %d LOG ROUND_END: sendrc=%d recrc=%d pending(S)=%d pending(R)=%d\n",
-      _pid, sendrc, recrc, evtstate[SEND_ID].pending, evtstate[RCV_ID].pending);
-
-
-  /* Periodic coverage dump: emits to stdout (captured in trail replay / logs). */
-        /* Behaviour coverage */
-      printf("@@@ %d LOG COVERAGE (GENERAL): prio(L/E/H)=%d/%d/%d send(inv_id/woke_rcv)=%d/%d rcv(null/pending/sat/nowait/twait/wforever)=%d/%d/%d/%d/%d/%d block(Ev/Tm)=%d/%d preempt=%d multicore=%d\n", 
-            _pid,
-            cov_send_lower_prio, cov_send_equal_prio, cov_send_higher_prio,
-            cov_send_inv_id, cov_send_woke_receiver,
-            cov_rcv_null_out, cov_rcv_pending, cov_rcv_satisfied,
-            cov_rcv_nowait_unsat, cov_rcv_timeout, cov_rcv_wait_forever,
-            cov_rcv_block_eventwait, cov_rcv_block_timewait,
-            cov_preempt_triggered, cov_multicore);
-
-        /* Scenario Coverage */
-        printf("@@@ %d LOG COVERAGE(SCENARIO): send_only=%d rcv_only=%d send_twice=%d send_preempt=%d bad_target=%d\n",
-              _pid,
-              cov_send_only, cov_receive_only, cov_send_twice, cov_send_preemptable, cov_send_bad_target);
-
-#ifdef TEST_GEN
-  assert(false);
-#endif
+::  (round_state != ROUND_OPEN) ->
+      skip
 od
-  printf("@@@ %d LOG Receiver %d finished\n",_pid,taskid);
-  tasks[taskid].state = Zombie;
-  printf("@@@ %d STATE %d Zombie\n",_pid,taskid)
+  //printf("@@@ %d LOG Receiver %d finished\n",_pid,taskid);
+  //tasks[taskid].state = Zombie;
+  //printf("@@@ %d STATE %d Zombie\n",_pid,taskid)
 }
+
+bool extract_now;
+byte round;
 
 init {
   pid nr;
@@ -829,12 +716,11 @@ init {
   printf("Event Manager Model running.\n");
   printf("Setup...\n");
 
-  printf("@@@ %d NAME Event_Manager_TestGen\n",_pid);
+  printf("@@@ %d NAME Event_Manager_TestGen\n",_pid)
   outputDefines();
   outputDeclarations();
 
   printf("@@@ %d INIT\n",_pid);
-  chooseScenario();
 
   printf("Run...\n");
 
@@ -843,4 +729,24 @@ init {
 
   run Sender(THIS_NODE,SEND_ID);
   run Receiver(THIS_NODE,RCV_ID);
+
+  do
+  ::  (round_state == ROUND_IDLE) -> 
+      /* start new round */
+      atomic {
+        resetRoundState();
+        chooseScenario();
+        round_state = ROUND_OPEN;
+      }
+
+  :: (round_state == ROUND_OPEN && sender_done && receiver_done) ->
+        round_state = ROUND_EXTRACT;
+
+#ifdef TEST_GEN
+  :: (round_state == ROUND_EXTRACT) ->
+        //assert(false);
+        round_state = ROUND_IDLE;
+#endif
+      /* loop for next round */
+  od
 }
